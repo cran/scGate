@@ -5,20 +5,21 @@
 #' @param data Seurat object containing a query data set - filtering will be applied to this object
 #' @param model A single scGate model, or a list of scGate models. See Details for this format
 #' @param pca.dim Number of dimensions for cluster analysis
-#' @param assay Seurat assay to use
-#' @param slot Data slot in Seurat object
+#' @param assay Seurat assay to use 
+#' @param slot Data slot in Seurat object to calculate UCell scores
 #' @param pos.thr Minimum UCell score value for positive signatures
 #' @param neg.thr Maximum UCell score value for negative signatures
 #' @param maxRank Maximum number of genes that UCell will rank per cell
 #' @param nfeatures Number of variable genes for dimensionality reduction
 #' @param k.param Number of nearest neighbors for knn smoothing
+#' @param smooth.decay Decay parameter for knn weights: (1-decay)^n
+#' @param smooth.up.only If TRUE, only let smoothing increase signature scores
 #' @param reduction Dimensionality reduction to use for knn smoothing. By default, calculates a new reduction
 #'     based on the given \code{assay}; otherwise you may specify a precalculated dimensionality reduction (e.g.
 #'     in the case of an integrated dataset after batch-effect correction)
 #' @param pca.dim Number of principal components for dimensionality reduction
 #' @param param_decay Controls decrease in parameter complexity at each iteration, between 0 and 1.
 #'     \code{param_decay == 0} gives no decay, increasingly higher \code{param_decay} gives increasingly stronger decay
-#' @param ncores Number of processors for parallel processing
 #' @param output.col.name Column name with 'pure/impure' annotation
 #' @param min.cells Minimum number of cells to cluster or define cell types
 #' @param additional.signatures A list of additional signatures, not included in the model, to be evaluated (e.g. a cycling signature). The scores for this
@@ -28,6 +29,9 @@
 #' @param genes.blacklist Genes blacklisted from variable features. The default loads the list of genes in \code{scGate::genes.blacklist.default};
 #'     you may deactivate blacklisting by setting \code{genes.blacklist=NULL}
 #' @param multi.asNA How to label cells that are "Pure" for multiple annotations: "Multi" (FALSE) or NA (TRUE)
+#' @param BPPARAM A [BiocParallel::bpparam()] object that tells scGate
+#'     how to parallelize. If provided, it overrides the `ncores` parameter. 
+#' @param ncores Number of processors for parallel processing
 #' @param seed Integer seed for random number generator
 #' @param verbose Verbose output
 
@@ -42,13 +46,13 @@
 #'     multi-class classifier, where only cells that are "Pure" for a single model are assigned a label, cells that are "Pure" for
 #'     more than one gating model are labeled as "Multi", all others cells are annotated as NA.
 #' @examples
+#' \donttest{
 #' ### Test using a small toy set
 #' data(query.seurat)
 #' # Define basic gating model for B cells
 #' my_scGate_model <- gating_model(name = "Bcell", signature = c("MS4A1")) 
 #' query.seurat <- scGate(query.seurat, model = my_scGate_model, reduction="pca")
 #' table(query.seurat$is.pure)
-#' \donttest{
 #' ### Test with larger datasets
 #' library(Seurat)
 #' testing.datasets <- get_testing_data(version = 'hsa.latest')
@@ -71,7 +75,7 @@
 #' @import ggplot2
 #' @importFrom dplyr %>% distinct bind_rows
 #' @importFrom UCell AddModuleScore_UCell SmoothKNN
-#' @import BiocParallel
+#' @importFrom BiocParallel MulticoreParam SerialParam bplapply
 #' @export
 
 scGate <- function(data,
@@ -81,9 +85,10 @@ scGate <- function(data,
                    assay=NULL,
                    slot="data",
                    ncores=1,
+                   BPPARAM=NULL,
                    seed=123,
                    keep.ranks=FALSE,
-                   reduction=c("calculate","pca","umap","harmony","Liors_elephant"),
+                   reduction=c("calculate","pca","umap","harmony"),
                    min.cells=30,
                    nfeatures=2000,
                    pca.dim=30,
@@ -91,6 +96,8 @@ scGate <- function(data,
                    maxRank=1500,
                    output.col.name='is.pure',
                    k.param=30,
+                   smooth.decay=0.1,
+                   smooth.up.only=FALSE,
                    genes.blacklist="default",
                    multi.asNA = FALSE,
                    additional.signatures=NULL,
@@ -104,7 +111,7 @@ scGate <- function(data,
   }
   assay <- DefaultAssay(data)
   
-  if (assay == "integrated") { #UCell should not run on integrated assay
+  if (assay == "integrated") { #UCell should not be run on integrated assay
     if ('RNA' %in% Assays(data)) {
       assay.ucell <- 'RNA'
     } else if ('SCT' %in% Assays(data)) {
@@ -145,43 +152,50 @@ scGate <- function(data,
     names(model) <- paste(output.col.name, seq_along(model), sep = ".")
   }
   
-  if (ncores>1) {
-    bpp <- MulticoreParam(workers=ncores)
-  } else {
-    bpp <- SerialParam()
+  if (is.null(BPPARAM)) {
+    if (ncores>1) {
+      BPPARAM <- MulticoreParam(workers=ncores)
+    } else {
+      BPPARAM <- SerialParam()
+    }
   }
-  
   # compute signature scores using UCell
   if (verbose) {
     message(sprintf("Computing UCell scores for all signatures using %s assay...\n", assay.ucell))
   }
-  data <- score.computing.for.scGate(data, model, bpp=bpp, assay=assay.ucell,
+  data <- score.computing.for.scGate(data, model, bpp=BPPARAM, assay=assay.ucell,
                                      slot=slot, maxRank=maxRank, 
                                      keep.ranks=keep.ranks,
                                      add.sign=additional.signatures)
   
-  for (m in names(model)) {
-    
-    col.id <- paste0(output.col.name, "_", m)
-
-    data <- run_scGate_singlemodel(data, model=model[[m]], k.param=k.param,
-                           param_decay=param_decay, pca.dim=pca.dim,
-                           nfeatures=nfeatures, min.cells=min.cells, bpp=bpp,
-                           assay=assay, slot=slot, genes.blacklist=genes.blacklist,
-                           pos.thr=pos.thr, neg.thr=neg.thr, verbose=verbose,
-                           reduction=reduction, colname=col.id, save.levels=save.levels)
-    
-    Idents(data) <- col.id
-    n_pure <- sum(data[[col.id]]=="Pure")
-    frac.to.keep <- n_pure/ncol(data)
-    mess <- sprintf("\n### Detected a total of %i pure '%s' cells (%.2f%% of total)",
-                    n_pure, m, 100*frac.to.keep)
-    message(mess)
-  }
- 
+  preds <- my.lapply(
+    X = names(model),
+    ncores = ncores,
+    BPPARAM =  BPPARAM,
+    FUN = function(m) {
+      col.id <- paste0(output.col.name, "_", m)
+      x <- run_scGate_singlemodel(data, model=model[[m]], k.param=k.param,
+                                     smooth.decay=smooth.decay, smooth.up.only=smooth.up.only,
+                                     param_decay=param_decay, pca.dim=pca.dim,
+                                     nfeatures=nfeatures, min.cells=min.cells,
+                                     assay=assay, slot=slot, genes.blacklist=genes.blacklist,
+                                     pos.thr=pos.thr, neg.thr=neg.thr, verbose=verbose,
+                                     reduction=reduction, colname=col.id, save.levels=save.levels)
+      n_pure <- sum(x[,col.id] == "Pure")
+      frac.to.keep <- n_pure/nrow(x)
+      mess <- sprintf("\n### Detected a total of %i pure '%s' cells (%.2f%% of total)",
+                      n_pure, m, 100*frac.to.keep)
+      message(mess)
+      x
+    }
+  )
+  preds.comb <- Reduce(cbind, preds)
+  data <- AddMetaData(data, preds.comb)
+  Idents(data) <- colnames(preds.comb)[1]
+  
   #Combine results from multiple model into single cell type annotation 
   data <- combine_scGate_multiclass(data, prefix=paste0(output.col.name,"_"),
-                            scGate_classes = names(m), multi.asNA = multi.asNA,
+                            scGate_classes = names(model), multi.asNA = multi.asNA,
                             min_cells=min.cells, out_column = "scGate_multi")
 
   #Back-compatibility with previous versions
@@ -356,9 +370,6 @@ load_scGate_model <- function(model_file, master.table = "master_table.tsv"){
 #' scGate.model.db <- get_scGateDB()
 #' # To see a specific model, browse the list of models:
 #' scGate.model.db$human$generic$Myeloid
-#' # Apply scGate with this model
-#' data(query.seurat)
-#' query <- scGate(query.seurat, model=scGate.model.db$human$generic$Myeloid, reduction="pca")
 #' @seealso \code{\link{scGate}} \code{\link{load_scGate_model}}
 #' @importFrom dplyr %>%  
 #' @importFrom utils download.file unzip read.table
@@ -520,7 +531,7 @@ test_my_model <- function(model, testing.version = 'hsa.latest',
   
   if (is(custom.dataset, "Seurat")){
     testing.datasets <- list()
-    testing.datasets$user.dataset <- custom.dataset
+    testing.datasets[["custom.dataset"]] <- custom.dataset
     custom <- TRUE
   } else { 
     custom <- FALSE
@@ -598,7 +609,7 @@ test_my_model <- function(model, testing.version = 'hsa.latest',
         performance = scGate::performance.metrics(actual = obj@meta.data[,target],
                                                   pred = obj$`is.pure`== "Pure")
       }else{
-        performance = scGate::performance.metrics(actual = obj@cell_type %in% target,
+        performance = scGate::performance.metrics(actual = obj@meta.data$cell_type %in% target,
                                                   pred = obj$`is.pure`== "Pure")
       }
       perf.out[[dset]] <- performance 
@@ -608,8 +619,13 @@ test_my_model <- function(model, testing.version = 'hsa.latest',
   }
   
   if(performance.computation){
-    perf <- Reduce(rbind,perf.out)
-    rownames(perf) <- names(perf.out)
+    
+    if(!custom){
+      perf <- Reduce(rbind,perf.out)
+      rownames(perf) <- names(perf.out)  
+    } else {
+      perf <- perf.out
+    }
   }
   
   if(plot) {
@@ -632,6 +648,7 @@ test_my_model <- function(model, testing.version = 'hsa.latest',
 #' @param impure.col Color code for impure category
 #' @return UMAP plots with 'Pure'/'Impure' labels for each level of the scGate model
 #' @examples
+#' \donttest{
 #' scGate.model.db <- get_scGateDB()
 #' model <- scGate.model.db$human$generic$Myeloid
 #' # Apply scGate with this model
@@ -641,6 +658,7 @@ test_my_model <- function(model, testing.version = 'hsa.latest',
 #' library(patchwork)     
 #' pll <- plot_levels(query.seurat)
 #' wrap_plots(pll)
+#' }
 #' @importFrom Seurat DimPlot
 #' @export
 
@@ -669,6 +687,7 @@ plot_levels <- function(obj, pure.col = "green" ,impure.col = "gray"){
 #' @return Returns a density plot of UCell scores for the signatures in the scGate model,
 #'     for each level of the model  
 #' @examples
+#' \donttest{
 #' scGate.model.db <- get_scGateDB()
 #' model <- scGate.model.db$human$generic$Tcell
 #' # Apply scGate with this model
@@ -677,6 +696,7 @@ plot_levels <- function(obj, pure.col = "green" ,impure.col = "gray"){
 #'     reduction="pca", save.levels=TRUE)
 #' # View UCell score distribution
 #' plot_UCell_scores(query.seurat, model)
+#' }
 #' @return Either a plot combined by patchwork (combine=T) or a list of plots (combine=F)
 #' @importFrom reshape2 melt
 #' @importFrom ggridges geom_density_ridges

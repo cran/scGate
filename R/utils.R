@@ -1,8 +1,10 @@
 run_scGate_singlemodel <- function(data, model, pos.thr=0.2, neg.thr=0.2, assay=NULL, slot="data",
                                    reduction="calculate", nfeatures=2000, pca.dim=30,
-                                   param_decay=0.25, min.cells=30, k.param=30, bpp=SerialParam(),
+                                   param_decay=0.25, min.cells=30, k.param=30,
+                                   smooth.decay=0.1, smooth.up.only=FALSE,
                                    genes.blacklist="default", verbose=FALSE,
-                                   colname="is.pure", save.levels=FALSE) {
+                                   colname="is.pure", save.levels=FALSE,
+                                   return.as.meta=TRUE) {
   
   if (!inherits(model, "data.frame")) {
     stop("Invalid scGate model. Please check the format of your model")
@@ -12,6 +14,7 @@ run_scGate_singlemodel <- function(data, model, pos.thr=0.2, neg.thr=0.2, assay=
   
   q <- data  #local copy to progressively remove cells
   tot.cells <- ncol(q)
+  meta.cols <- c()
   
   ## prepare output object (one pure/impure flag by level)
   output_by_level <- rep("Impure",length(list.model)*tot.cells)
@@ -39,6 +42,9 @@ run_scGate_singlemodel <- function(data, model, pos.thr=0.2, neg.thr=0.2, assay=
     }
     
     k.use <- round((1-param_decay)**(lev-1) * k.param)
+    
+    smooth.decay.use <- 1-(1-smooth.decay)*(1-param_decay*(lev-1))
+    
     if (reduction=="calculate") {
       pca.use <- round((1-param_decay)**(lev-1) * pca.dim)
       nfeat.use <- round((1-param_decay)**(lev-1) * nfeatures)
@@ -47,7 +53,8 @@ run_scGate_singlemodel <- function(data, model, pos.thr=0.2, neg.thr=0.2, assay=
     }
     q <- find.nn(q, assay=assay, slot=slot, signatures=all.names,min.cells=min.cells,
                  nfeatures=nfeat.use, reduction=reduction, npca=pca.use, k.param=k.use,
-                 bpp=bpp, genes.blacklist=genes.blacklist)
+                 smooth.decay=smooth.decay.use, smooth.up.only=smooth.up.only,
+                 genes.blacklist=genes.blacklist)
     
     q <- filter_bymean(q, positive=pos.names, negative=neg.names, assay=assay,
                        pos.thr=pos.thr, neg.thr=neg.thr)
@@ -72,6 +79,7 @@ run_scGate_singlemodel <- function(data, model, pos.thr=0.2, neg.thr=0.2, assay=
   
   #Add 'pure' labels to metadata
   data <- AddMetaData(data,col.name = colname, metadata = rep("Impure",tot.cells))
+  meta.cols <- c(meta.cols, colname)
   
   if(length(pure.cells)>0){
     data@meta.data[pure.cells, colname] <- "Pure"
@@ -87,14 +95,20 @@ run_scGate_singlemodel <- function(data, model, pos.thr=0.2, neg.thr=0.2, assay=
       combname <- paste0(colname,".",name.lev)
       data <- AddMetaData(data,col.name = combname, metadata = output_by_level[[name.lev]])
       data@meta.data[,combname] <- factor(data@meta.data[,combname], levels=c("Pure","Impure"))
+      meta.cols <- c(meta.cols, combname)
     }
   }
-  return(data)
+  if (return.as.meta) {
+    return(data@meta.data[,meta.cols, drop=F])
+  } else {
+    return(data)
+  }
 }
 
 
 find.nn <- function(q, assay = "RNA", slot="data", signatures=NULL, npca=30,
-                    nfeatures=2000, k.param=10, bpp=SerialParam(),
+                    nfeatures=2000, k.param=10,
+                    smooth.decay=0.1, smooth.up.only=FALSE,
                     min.cells=30, reduction="calculate", genes.blacklist=NULL) {
   
   DefaultAssay(q) <- assay
@@ -126,22 +140,26 @@ find.nn <- function(q, assay = "RNA", slot="data", signatures=NULL, npca=30,
     if (ngenes > 200) {  #only perform this for high-dim data
       q <- FindVariableFeatures(q, selection.method = "vst", nfeatures = nfeatures, verbose = FALSE)
     } else {
-      q@assays[[assay]]@var.features <- rownames(q)
+      VariableFeatures(q) <- rownames(q)
     }
     
-    q@assays[[assay]]@var.features <- setdiff(q@assays[[assay]]@var.features, genes.blacklist)
+    VariableFeatures(q) <- setdiff(VariableFeatures(q), genes.blacklist)
     
     q <- ScaleData(q, verbose=FALSE)
-    q <- RunPCA(q, features = q@assays[[assay]]@var.features, npcs=npca, verbose = FALSE, reduction.key = "knnPCA_")
-    
+    q <- suppressWarnings(RunPCA(q, features = VariableFeatures(q),
+                                 npcs=npca, verbose = FALSE,
+                                 reduction.key = "knnPCA_"))
     red.use <- 'pca'
   } else {
     red.use <- reduction
   }
+  if (smooth.decay>1) {
+    smooth.decay=1
+  }
   
   #Smooth scores by kNN neighbors
-  q <- SmoothKNN(q, signature.names=signatures, reduction=red.use,
-                 k=k.param, suffix = NULL, BPPARAM=bpp)
+  q <- SmoothKNN(q, signature.names=signatures, reduction=red.use, k=k.param,
+                 decay=smooth.decay, up.only=smooth.up.only, suffix = NULL)
   
   return(q)
   
@@ -349,4 +367,13 @@ use_master_table <- function(df.model, master.table, name = "name",descript = "s
   df.model[complete.from.master.table,descript] <- vect[nms]
   #  df.model[descript] <- output.sign
   return(df.model)
+}
+
+#Serial or parallel lapply
+my.lapply <- function(X=NULL, FUN, ncores=1, BPPARAM) {
+  if (ncores>1) {
+    BiocParallel::bplapply(X=X, FUN=FUN, BPPARAM = BPPARAM)
+  } else {
+    lapply(X=X, FUN=FUN)
+  }
 }

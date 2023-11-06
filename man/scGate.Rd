@@ -12,9 +12,10 @@ scGate(
   assay = NULL,
   slot = "data",
   ncores = 1,
+  BPPARAM = NULL,
   seed = 123,
   keep.ranks = FALSE,
-  reduction = c("calculate", "pca", "umap", "harmony", "Liors_elephant"),
+  reduction = c("calculate", "pca", "umap", "harmony"),
   min.cells = 30,
   nfeatures = 2000,
   pca.dim = 30,
@@ -22,6 +23,8 @@ scGate(
   maxRank = 1500,
   output.col.name = "is.pure",
   k.param = 30,
+  smooth.decay = 0.1,
+  smooth.up.only = FALSE,
   genes.blacklist = "default",
   multi.asNA = FALSE,
   additional.signatures = NULL,
@@ -40,9 +43,12 @@ scGate(
 
 \item{assay}{Seurat assay to use}
 
-\item{slot}{Data slot in Seurat object}
+\item{slot}{Data slot in Seurat object to calculate UCell scores}
 
 \item{ncores}{Number of processors for parallel processing}
+
+\item{BPPARAM}{A [BiocParallel::bpparam()] object that tells scGate
+how to parallelize. If provided, it overrides the `ncores` parameter.}
 
 \item{seed}{Integer seed for random number generator}
 
@@ -66,6 +72,10 @@ in the case of an integrated dataset after batch-effect correction)}
 \item{output.col.name}{Column name with 'pure/impure' annotation}
 
 \item{k.param}{Number of nearest neighbors for knn smoothing}
+
+\item{smooth.decay}{Decay parameter for knn weights: (1-decay)^n}
+
+\item{smooth.up.only}{If TRUE, only let smoothing increase signature scores}
 
 \item{genes.blacklist}{Genes blacklisted from variable features. The default loads the list of genes in \code{scGate::genes.blacklist.default};
 you may deactivate blacklisting by setting \code{genes.blacklist=NULL}}
@@ -97,13 +107,13 @@ Models for scGate are data frames where each line is a signature for a given fil
     more than one gating model are labeled as "Multi", all others cells are annotated as NA.
 }
 \examples{
+\donttest{
 ### Test using a small toy set
 data(query.seurat)
 # Define basic gating model for B cells
 my_scGate_model <- gating_model(name = "Bcell", signature = c("MS4A1")) 
 query.seurat <- scGate(query.seurat, model = my_scGate_model, reduction="pca")
 table(query.seurat$is.pure)
-\donttest{
 ### Test with larger datasets
 library(Seurat)
 testing.datasets <- get_testing_data(version = 'hsa.latest')
