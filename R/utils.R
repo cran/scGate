@@ -369,11 +369,101 @@ use_master_table <- function(df.model, master.table, name = "name",descript = "s
   return(df.model)
 }
 
-#Serial or parallel lapply
-my.lapply <- function(X=NULL, FUN, ncores=1, BPPARAM) {
-  if (ncores>1) {
-    BiocParallel::bplapply(X=X, FUN=FUN, BPPARAM = BPPARAM)
+
+
+# Function to download dictionary for cell ontology to scGate cell name conversion
+get_CellOntology_dictionary <- function(destination = tempdir(),
+                                 force_update = FALSE,
+                                 version = "latest",
+                                 branch=c("master","dev"),
+                                 verbose=FALSE,
+                                 repo_url = "https://github.com/carmonalab/scGate_models"){
+  
+  branch = branch[1]
+  if (version == "latest") {
+    repo_url_zip = sprintf("%s/archive/%s.zip", repo_url,branch)
+    repo.name <- paste0("scGate_models-",branch)
+    repo.name.v <- repo.name
   } else {
-    lapply(X=X, FUN=FUN)
+    repo_url_zip = sprintf("%s/archive/refs/tags/%s.zip", repo_url, version)
+    repo.name = sprintf("scGate_models-%s", version)
+    #for some reason GitHub remove the 'v' from repo name after unzipping
+    repo.name.v <- sprintf("scGate_models-%s", gsub("^v","",version, perl=TRUE)) 
+  }
+  destination <- normalizePath(destination, winslash = "/")
+  repo_path = file.path(destination,repo.name)
+  repo_path.v = file.path(destination,repo.name.v)
+  temp <- tempfile()
+  
+  if(!dir.exists(repo_path)){
+    if(!dir.exists(destination)) {
+      dir.create(destination)
+    }
+    download.file(repo_url_zip,temp)
+    unzip(temp,exdir = destination)
+    unlink(temp)
+  }else if(force_update){
+    download.file(repo_url_zip,temp)
+    system(sprintf("rm -r %s",repo_path))  # this ensure that db would be completely overwritten and old model will not persist. 
+    unzip(temp,exdir = destination, overwrite = force_update)
+    unlink(temp)
+  }else{
+    message(sprintf("\nUsing local version of repo %s for cell ontology dictionary",repo.name))
+  }
+  
+  #Now load the models into a list structure
+  allfiles <- list.files(repo_path.v, full.names = T, recursive = TRUE)
+  modelfiles <- grep("dictionary.tsv", allfiles, value = TRUE)
+  
+  if(length(modelfiles)!=1){
+    stop("Error in fetching the dictionary")
+  }
+  dict <- read.table(modelfiles, sep ="\t",header =T)
+  
+  return(dict)
+}
+
+
+
+# Function to retrieve cell ontology name and id based on a dictionary
+map.CellOntology <- function(object = NULL,
+                             branch = "master",
+                             multi.col.name = "scGate_multi",
+                             force_update = F){
+  # Fetch dictionary
+  dict <- get_CellOntology_dictionary(branch = branch,
+                                      force_update = force_update)
+  
+  if (inherits(object, "Seurat")){
+    data <- object@meta.data
+  } else if (inherits(object, "data.frame")){
+    data <- object
+  } else{
+    stop("Object should be either a data.frame or a Seurat object")
+  }
+  
+  if(!any(grepl(multi.col.name, names(data)))){
+    stop(paste(multi.col.name, "not found in the data"))
+  }
+  
+  # convert rownames to a column
+  data$Row.names <- rownames(data)
+  rownames(data) <- NULL
+  
+  # keep only multi.col.name and rownames dataframe
+  data <- data[,c("Row.names", multi.col.name)]
+  
+  # Combine with scGate_multi
+  data <- left_join(data, dict, by = multi.col.name)
+  
+  # render rownames for Seurat metadata addition
+  rownames(data) <- data$Row.names
+  data$Row.names <- NULL
+  
+  if (inherits(object, "Seurat")){
+    object <- AddMetaData(object, metadata = data)
+    return(object)
+  } else if (inherits(object, "data.frame")){
+    return(data)
   }
 }

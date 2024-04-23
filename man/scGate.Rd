@@ -26,10 +26,12 @@ scGate(
   smooth.decay = 0.1,
   smooth.up.only = FALSE,
   genes.blacklist = "default",
+  return.CellOntology = TRUE,
   multi.asNA = FALSE,
   additional.signatures = NULL,
   save.levels = FALSE,
-  verbose = FALSE
+  verbose = FALSE,
+  progressbar = T
 )
 }
 \arguments{
@@ -80,6 +82,8 @@ in the case of an integrated dataset after batch-effect correction)}
 \item{genes.blacklist}{Genes blacklisted from variable features. The default loads the list of genes in \code{scGate::genes.blacklist.default};
 you may deactivate blacklisting by setting \code{genes.blacklist=NULL}}
 
+\item{return.CellOntology}{If TRUE Cell ontology name and id are returned as additional metadata columns when running multiple models.}
+
 \item{multi.asNA}{How to label cells that are "Pure" for multiple annotations: "Multi" (FALSE) or NA (TRUE)}
 
 \item{additional.signatures}{A list of additional signatures, not included in the model, to be evaluated (e.g. a cycling signature). The scores for this
@@ -88,6 +92,8 @@ list of signatures will be returned but not used for filtering.}
 \item{save.levels}{Whether to save in metadata the filtering output for each gating model level}
 
 \item{verbose}{Verbose output}
+
+\item{progressbar}{Whether to show a progressbar or not}
 }
 \value{
 A new metadata column \code{is.pure} is added to the query Seurat object, indicating which cells passed the scGate filter.

@@ -28,12 +28,14 @@
 #' @param keep.ranks Store UCell rankings in Seurat object. This will speed up calculations if the same object is applied again with new signatures.
 #' @param genes.blacklist Genes blacklisted from variable features. The default loads the list of genes in \code{scGate::genes.blacklist.default};
 #'     you may deactivate blacklisting by setting \code{genes.blacklist=NULL}
+#' @param return.CellOntology If TRUE Cell ontology name and id are returned as additional metadata columns when running multiple models.
 #' @param multi.asNA How to label cells that are "Pure" for multiple annotations: "Multi" (FALSE) or NA (TRUE)
 #' @param BPPARAM A [BiocParallel::bpparam()] object that tells scGate
 #'     how to parallelize. If provided, it overrides the `ncores` parameter. 
 #' @param ncores Number of processors for parallel processing
 #' @param seed Integer seed for random number generator
 #' @param verbose Verbose output
+#' @param progressbar Whether to show a progressbar or not
 
 #' @return A new metadata column \code{is.pure} is added to the query Seurat object, indicating which cells passed the scGate filter.
 #'     The \code{active.ident} is also set to this variable.
@@ -76,6 +78,7 @@
 #' @importFrom dplyr %>% distinct bind_rows
 #' @importFrom UCell AddModuleScore_UCell SmoothKNN
 #' @importFrom BiocParallel MulticoreParam SerialParam bplapply
+#' @importFrom dplyr left_join
 #' @export
 
 scGate <- function(data,
@@ -99,10 +102,12 @@ scGate <- function(data,
                    smooth.decay=0.1,
                    smooth.up.only=FALSE,
                    genes.blacklist="default",
+                   return.CellOntology = TRUE,
                    multi.asNA = FALSE,
                    additional.signatures=NULL,
                    save.levels=FALSE,
-                   verbose=FALSE) {
+                   verbose=FALSE,
+                   progressbar = T) {
   
   set.seed(seed)
   
@@ -147,6 +152,8 @@ scGate <- function(data,
   #With single model, make a list of one element
   if (!inherits(model, "list")) {
     model <- list("Target" = model)
+    # also if single model is provided do not run return.CellOntology
+    return.CellOntology <- FALSE
   }
   if (is.null(names(model))) {
     names(model) <- paste(output.col.name, seq_along(model), sep = ".")
@@ -154,7 +161,7 @@ scGate <- function(data,
   
   if (is.null(BPPARAM)) {
     if (ncores>1) {
-      BPPARAM <- MulticoreParam(workers=ncores)
+      BPPARAM <- MulticoreParam(workers=ncores, progressbar = progressbar)
     } else {
       BPPARAM <- SerialParam()
     }
@@ -168,9 +175,8 @@ scGate <- function(data,
                                      keep.ranks=keep.ranks,
                                      add.sign=additional.signatures)
   
-  preds <- my.lapply(
+  preds <- bplapply(
     X = names(model),
-    ncores = ncores,
     BPPARAM =  BPPARAM,
     FUN = function(m) {
       col.id <- paste0(output.col.name, "_", m)
@@ -196,7 +202,20 @@ scGate <- function(data,
   #Combine results from multiple model into single cell type annotation 
   data <- combine_scGate_multiclass(data, prefix=paste0(output.col.name,"_"),
                             scGate_classes = names(model), multi.asNA = multi.asNA,
-                            min_cells=min.cells, out_column = "scGate_multi")
+                            min_cells=1, out_column = "scGate_multi")
+  
+  # Add CellOntology name and id if specificed
+  if(return.CellOntology){
+    tryCatch(
+    {
+      data <- map.CellOntology(data)
+    },
+      error = function(e){
+        message(e)
+        message("Cell ontology ID addition not possible.")
+      }
+    )
+  }
 
   #Back-compatibility with previous versions
   if (names(model)[1] == 'Target') {
@@ -344,7 +363,7 @@ plot_tree <- function(model, box.size = 8, edge.text.size = 4) {
 
 load_scGate_model <- function(model_file, master.table = "master_table.tsv"){
   
-  model <- read.table(model_file, sep ="\t",header =TRUE)
+  model <- suppressWarnings(read.table(model_file, sep ="\t", header =TRUE))
   model <- use_master_table(model, master.table = master.table)
   
   return(model)
@@ -378,7 +397,7 @@ load_scGate_model <- function(model_file, master.table = "master_table.tsv"){
 get_scGateDB <- function(destination = tempdir(),
                          force_update = FALSE,
                          version = "latest",
-                         branch=c("master","dev"), 
+                         branch=c("master","dev"),
                          verbose=FALSE,
                          repo_url = "https://github.com/carmonalab/scGate_models"){
   
@@ -889,7 +908,7 @@ get_testing_data <- function(version = 'hsa.latest', destination = tempdir()){
 combine_scGate_multiclass <- function(obj,
                                   prefix="is.pure_",
                                   scGate_classes=NULL,
-                                  min_cells=20,
+                                  min_cells=1,
                                   multi.asNA = FALSE,
                                   out_column="scGate_multi"
 ){
