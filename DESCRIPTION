@@ -2,7 +2,7 @@ Package: scGate
 Type: Package
 Title: Marker-Based Cell Type Purification for Single-Cell Sequencing
         Data
-Version: 1.7.0
+Version: 1.7.2
 Authors@R: c(
   person('Massimo', 'Andreatta',
     email = 'massimo.andreatta@unige.ch',
@@ -24,7 +24,8 @@ Description: A common bioinformatics task in single-cell data analysis is to pur
 biocViews:
 Depends: R (>= 4.3.0)
 Imports: Seurat (>= 4.0.0), UCell (>= 2.6.0), dplyr, stats, utils,
-        methods, patchwork, ggridges, reshape2, ggplot2, BiocParallel
+        methods, patchwork, ggridges, colorspace, reshape2, ggplot2,
+        BiocParallel
 Suggests: ggparty, partykit, knitr, rmarkdown
 VignetteBuilder: knitr
 URL: https://github.com/carmonalab/scGate
@@ -34,11 +35,12 @@ Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.3.2
 NeedsCompilation: no
-Packaged: 2025-04-24 13:14:46 UTC; mass
-Author: Massimo Andreatta [aut, cre] (<https://orcid.org/0000-0002-8036-2647>),
-  Ariel Berenstein [aut] (<https://orcid.org/0000-0001-8540-5389>),
+Packaged: 2025-07-23 09:44:45 UTC; massimo
+Author: Massimo Andreatta [aut, cre] (ORCID:
+    <https://orcid.org/0000-0002-8036-2647>),
+  Ariel Berenstein [aut] (ORCID: <https://orcid.org/0000-0001-8540-5389>),
   Josep Garnica [aut],
-  Santiago Carmona [aut] (<https://orcid.org/0000-0002-2495-0671>)
+  Santiago Carmona [aut] (ORCID: <https://orcid.org/0000-0002-2495-0671>)
 Maintainer: Massimo Andreatta <massimo.andreatta@unige.ch>
 Repository: CRAN
-Date/Publication: 2025-04-24 14:10:02 UTC
+Date/Publication: 2025-07-23 10:50:02 UTC

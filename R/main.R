@@ -55,6 +55,8 @@
 #' my_scGate_model <- gating_model(name = "Bcell", signature = c("MS4A1")) 
 #' query.seurat <- scGate(query.seurat, model = my_scGate_model, reduction="pca")
 #' table(query.seurat$is.pure)
+#' }
+#' \dontrun{
 #' ### Test with larger datasets
 #' library(Seurat)
 #' testing.datasets <- get_testing_data(version = 'hsa.latest')
@@ -246,6 +248,7 @@ scGate <- function(data,
 #'     indicate the 'positive' (accepted) cell types, red boxed indicate the
 #'     'negative' cell types (filtered out). The final Pure population is the
 #'     bottom right subset in the tree.
+#' @import colorspace
 #' @examples
 #' library(ggparty)
 #' models <- get_scGateDB()
@@ -528,7 +531,7 @@ performance.metrics <- function(actual,pred,return_contingency=FALSE){
 #' @return Returns performance metrics for the benchmarking datasets, and optionally
 #'     plots of the predicted cell type labels in reduced dimensionality space.  
 #' @examples
-#' \donttest{
+#' \dontrun{
 #' scGate.model.db <- get_scGateDB()
 #' # Browse the list of models and select one:
 #' model.panBcell <-  scGate.model.db$human$generic$PanBcell
@@ -854,7 +857,7 @@ gating_model <- function(model=NULL, level= 1, name, signature,
 #' @param destination Save to this directory
 #' @return A list of datasets that can be used to test scGate    
 #' @examples
-#' \donttest{
+#' \dontrun{
 #' testing.datasets <- get_testing_data(version = 'hsa.latest')
 #' }
 #' @export
@@ -865,7 +868,7 @@ get_testing_data <- function(version = 'hsa.latest', destination = tempdir()){
     dir.create(data.folder,recursive = TRUE)
   }
   if(version == 'hsa.latest'){
-    testing.data.url = "https://figshare.com/ndownloader/files/31114669?private_link=75b1193bd4c705ffb50b"
+    testing.data.url = "https://figshare.com/ndownloader/files/56482271"
     testing.data.path = file.path(data.folder,"testing.dataset.2k.rds")
   }
   if(!file.exists(testing.data.path)){
